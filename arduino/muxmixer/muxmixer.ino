@@ -1,3 +1,5 @@
+#include <max5387.h>
+
 //#include <Encoder.h>
 #include <SPI.h>
 #include <Wire.h>
@@ -10,7 +12,7 @@
 //#define BALANCE
 
 // Configs
-#define VERSION 0.2
+#define VERSION "0.3"
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
 #define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
@@ -21,8 +23,9 @@
 #define CLEAR display.clearDisplay()
 #define BUTTON_TIME 10
 #define SLEEPTIME 10000000
-#define SWITCHTIME 100000
-#define SAVETIME 2500000
+#define SWITCHTIME  100000
+#define SAVETIME    2500000
+#define SAVETIMEOUT 10000000
 #define LOGO_WIDTH 128
 #define LOGO_HEIGHT 32
 
@@ -66,7 +69,7 @@ const unsigned char logo [] PROGMEM = {
 
 // Setup
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-
+Max5387 volumePot;
 
 //
 void sleepDisplay(Adafruit_SSD1306* display) {
@@ -86,7 +89,7 @@ typedef struct  {
 configData runningConfig[4];
 configData savedConfig[4];
 volatile int lastEncoded = 0;
-bool savePending = false;
+unsigned long savePending = 0;
 volatile unsigned long lastInput = 0;
 
 volatile bool intTriggered = false;
@@ -106,8 +109,11 @@ unsigned long buttonPressedTime;
 void setup() {
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  volumePot.begin(Max5387::MAX5387_I2C_ADRS0);  //  0x28 All three A-lines to GND.
   display.setTextColor(SSD1306_WHITE);
   display.cp437(true);
+  Wire.begin();
+
 
   CLEAR;
   display.clearDisplay();
@@ -119,9 +125,9 @@ void setup() {
   display.display();
   delay(2000);
 #endif
-  active = EEPROM.read(0);
-  if ( active == 255 ) { // Empty EEPROM.
-    active = 0;
+  input = EEPROM.read(0);
+  if ( input == 255 ) { // Empty EEPROM.
+    input = 0;
   }
   for ( int i = 0; i < 4; i++) {
     EEPROM.get((i * 2) + 1, runningConfig[i]);
@@ -155,8 +161,10 @@ void loop() {
     //    display.ssd1306_command(SSD1306_DISPLAYON);
     lastInput = micros();
   }
-  if ( micros() > buttonPressedTime + SAVETIME && savePending ) {
-    saveConfig();
+  if ( micros() > buttonPressedTime + SAVETIME ) {
+    if ( savePending )
+      saveConfig();
+    EEPROM.update(0, input);
   } else  if ( micros() > buttonPressedTime + SWITCHTIME)
     selection++;
 #if defined (BALANCE)
@@ -205,16 +213,27 @@ void loop() {
           balance = 100;
         break;
     }
-    //runningConfig[input] = {volume, mix};
   }
 
   interrupts();
 
-  if ( memcmp(&runningConfig, &savedConfig, sizeof(runningConfig)) ) {
-    savePending = true;
-
+  if ( memcmp(&runningConfig[input], &savedConfig[input], sizeof(runningConfig[input]))) {
+    savePending = micros();
+  } else {
+    savePending = 0;
   }
+  /*
+    if ( (micros() > savePending + SAVETIMEOUT) && savePending ) {
+      savePending = 0;
+      runningConfig[input] = savedConfig[input];
+    }
+  */
   pos = 0;
+  volumePot.write_ch_AB(map(volume, 0, 100, 0, 255));
+  Wire.beginTransmission(0x2D); 
+  Wire.write(byte(0x00));
+  Wire.write(map(mix, 0, 100, 63, 0));
+  Wire.endTransmission();
   printLayout(input, volume, mix, balance, selection);
 
 }
@@ -264,7 +283,7 @@ void printInput(int input) {
 }
 
 void printMix(int mix) {
-  display.setCursor((display.width() / 2), 1);
+  display.setCursor((display.width() / 2) + 1, 1);
 #if defined (DEBUG)
   display.print(mix);
 #else
@@ -316,6 +335,10 @@ void updateEncoder() {
   interrupts();
 }
 
+void reReadConfig() {
+  for ( int i = 0; i < 4; i++)
+    runningConfig[i] = savedConfig[i];
+}
 void saveConfig() {
   savePending = false;
   for ( int i = 0; i < 4; i++) {
