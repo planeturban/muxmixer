@@ -234,6 +234,12 @@ void loop() {
   Wire.write(byte(0x00));
   Wire.write(map(mix, 0, 100, 63, 0));
   Wire.endTransmission();
+// I've got bad soldering skills. It ought to be @ 0x2D, but it turned up at 2C. I'll sacrifice some cycles over solder.
+  Wire.beginTransmission(0x2C); 
+  Wire.write(byte(0x00));
+  Wire.write(map(mix, 0, 100, 63, 0));
+  Wire.endTransmission();
+
   printLayout(input, volume, mix, balance, selection);
 
 }
